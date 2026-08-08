@@ -1,0 +1,97 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-display: "Fraunces", serif;
+  --font-body: "Inter", sans-serif;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.25s ease-out both;
+}
+
+
+body {
+  background-color: #f4f9f2;
+  color: #1e331b;
+  font-family: var(--font-body);
+}
+
+.furrow-divider {
+  height: 1px;
+  background-image: repeating-linear-gradient(
+    90deg,
+    #d1e4cb 0,
+    #d1e4cb 6px,
+    transparent 6px,
+    transparent 12px
+  );
+}
+
+.severity-bar {
+  height: 8px;
+  width: 100%;
+  border-radius: 9999px;
+  background-color: #e5f0e1;
+  overflow: hidden;
+}
+.severity-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 9999px;
+  transition: all 500ms;
+}
+
+.card {
+  border-radius: 1.25rem;
+  border: 1px solid #dceed5;
+  background-color: #ffffff;
+  padding: 1.5rem;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.02);
+}
+
+.btn-primary {
+  display: inline-flex;
+  items-center: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  background-color: #4c8a38;
+  padding: 0.75rem 1.5rem;
+  font-weight: 600;
+  color: #ffffff;
+  transition-property: all;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+.btn-primary:hover {
+  background-color: #396c2a;
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+}
+
+.btn-secondary {
+  display: inline-flex;
+  items-center: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  border: 1px solid #c8dfbf;
+  background-color: #ffffff;
+  padding: 0.75rem 1.5rem;
+  font-weight: 600;
+  color: #396c2a;
+  transition-property: all;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+.btn-secondary:hover {
+  background-color: #eef6eb;
+}

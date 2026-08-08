@@ -1,0 +1,24 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Legacy top-level scans collection (locked down).
+    match /scans/{scanId} {
+      allow read, write: if false;
+    }
+
+    // Per-user scans stored under /users/{userId}/scans/{scanId}
+    match /users/{userId}/scans/{scanId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null && request.auth.uid == userId;
+      allow update, delete: if false; // scans are immutable once written
+    }
+
+    // Reserved for the admin-approval queue described in the project brief
+    // (dataset image review) — locked down to admin custom-claim users only.
+    match /pendingDatasetImages/{imageId} {
+      allow read, write: if request.auth != null && request.auth.token.admin == true;
+      allow create: if request.auth != null;
+    }
+  }
+}

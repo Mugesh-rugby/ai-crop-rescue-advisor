@@ -1,0 +1,13 @@
+node_modules
+.next
+.env.local
+*.log
+training/saved_model
+training/tfjs_model
+dataset/
+.venv/
+__pycache__/
+checkpoints/
+*.pth
+*.onnx
+__pycache__/
