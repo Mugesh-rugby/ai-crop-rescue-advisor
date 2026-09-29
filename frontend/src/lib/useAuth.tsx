@@ -17,7 +17,7 @@ import {
   updateProfile,
   getIdToken,
 } from "firebase/auth";
-import { auth, googleProvider, isFirebaseConfigured } from "./firebase";
+import { auth, googleProvider } from "./firebase";
 
 export interface AppUser {
   uid: string;

@@ -116,7 +116,7 @@ export default function LoginPage() {
               { stat: "91%", label: "Detection Accuracy" },
               { stat: "10+", label: "Disease Classes" },
               { stat: "Real-time", label: "Scan Results" },
-              { stat: "Local AI", label: "Ollama Powered" },
+              { stat: "Groq AI", label: "Powered" },
             ].map((item) => (
               <div key={item.label} className="rounded-xl bg-white/10 p-4">
                 <p className="text-2xl font-extrabold">{item.stat}</p>

@@ -24,12 +24,17 @@ export async function POST(req: Request) {
       );
     }
 
-    const ollamaUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
-    const ollamaModel = process.env.OLLAMA_MODEL || "gemma3:1b";
+    const groqApiKey = process.env.GROQ_API_KEY;
+    if (!groqApiKey) {
+      return NextResponse.json(
+        { error: "GROQ_API_KEY is not configured. Add it to your .env.local file." },
+        { status: 500 }
+      );
+    }
 
     const isHealthy = condition.toLowerCase() === "healthy";
 
-    const prompt = isHealthy
+    const userPrompt = isHealthy
       ? `You are a crop pathologist. The scan shows a HEALTHY ${crop} plant.
 Return ONLY a valid JSON object (no markdown, no asterisks, no extra text) with:
 {
@@ -56,28 +61,38 @@ Return ONLY a valid JSON object (no markdown, no asterisks, no extra text) with 
   "recoveryTimeDays": [7, 21]
 }`;
 
-    const response = await fetch(`${ollamaUrl}/api/generate`, {
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${groqApiKey}`,
+      },
       body: JSON.stringify({
-        model: ollamaModel,
-        prompt,
-        format: "json",
-        stream: false,
-        options: {
-          temperature: 0.3,
-          num_predict: 800,
-        },
+        model: process.env.GROQ_MODEL || "openai/gpt-oss-20b",
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are an expert crop pathologist. Always respond with valid JSON only — no markdown, no extra text, no code fences.",
+          },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.3,
+        max_tokens: 800,
+        response_format: { type: "json_object" },
       }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      return NextResponse.json({ error: `Ollama error: ${errorText}` }, { status: response.status });
+      return NextResponse.json(
+        { error: `Groq API error: ${errorText}` },
+        { status: response.status }
+      );
     }
 
     const data = await response.json();
-    const replyText = data.response || "";
+    const replyText = data.choices?.[0]?.message?.content || "";
 
     let parsedDiagnosis;
     try {
@@ -85,8 +100,8 @@ Return ONLY a valid JSON object (no markdown, no asterisks, no extra text) with 
       const cleaned = replyText.replace(/```json?/gi, "").replace(/```/g, "").trim();
       parsedDiagnosis = JSON.parse(cleaned);
     } catch {
-      console.warn("Ollama returned invalid JSON:", replyText);
-      return NextResponse.json({ error: "Ollama returned invalid JSON." }, { status: 500 });
+      console.warn("Groq returned invalid JSON:", replyText);
+      return NextResponse.json({ error: "Groq AI returned invalid JSON." }, { status: 500 });
     }
 
     // Clean markdown from all string values in the response
@@ -103,7 +118,10 @@ Return ONLY a valid JSON object (no markdown, no asterisks, no extra text) with 
   } catch (error: any) {
     console.error("Error in /api/diagnose route:", error);
     return NextResponse.json(
-      { error: "Failed to connect to Ollama. Make sure it is running with gemma3:1b.", details: error.message },
+      {
+        error: "Failed to connect to Groq AI. Check your GROQ_API_KEY and internet connection.",
+        details: error.message,
+      },
       { status: 500 }
     );
   }

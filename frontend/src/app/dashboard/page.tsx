@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/useAuth";
-import { getUserScans, computeDashboardStats, type ScanRecord, type DashboardStats } from "@/lib/scans";
+import { subscribeToUserScans, computeDashboardStats, type ScanRecord, type DashboardStats } from "@/lib/scans";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import Link from "next/link";
 import { Loader2 } from "lucide-react";
@@ -14,23 +14,43 @@ export default function DashboardPage() {
   const [scans, setScans] = useState<ScanRecord[] | null>(null);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [dbError, setDbError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) {
+      setScans([]);
+      setStats(null);
       setLoading(false);
       return;
     }
-    getUserScans(user.uid).then((s) => {
-      setScans(s);
-      setStats(computeDashboardStats(s));
+
+    setLoading(true);
+    setDbError(null);
+
+    const unsubscribe = subscribeToUserScans(user.uid, (scanRecords) => {
+      setScans(scanRecords);
+      setStats(computeDashboardStats(scanRecords));
       setLoading(false);
     });
-  }, [user]);
+
+    return () => {
+      unsubscribe();
+    };
+  }, [user?.uid]);
 
   if (authLoading || loading) {
     return (
       <div className="mx-auto max-w-5xl px-6 py-16">
         <Loader2 className="h-5 w-5 animate-spin text-canopy-400" />
+      </div>
+    );
+  }
+
+  if (dbError) {
+    return (
+      <div className="mx-auto max-w-5xl px-6 py-16 text-center">
+        <p className="mb-3 text-red-600 font-bold">Unable to load your scans.</p>
+        <p className="text-sm text-canopy-400">{dbError}</p>
       </div>
     );
   }
@@ -116,7 +136,6 @@ export default function DashboardPage() {
           <thead className="text-canopy-400">
             <tr>
               <th className="pb-2">Date</th>
-              <th className="pb-2">Crop</th>
               <th className="pb-2">Condition</th>
               <th className="pb-2">Confidence</th>
             </tr>
@@ -125,7 +144,6 @@ export default function DashboardPage() {
             {(scans ?? []).slice(0, 10).map((s) => (
               <tr key={s.id} className="border-t border-canopy-800">
                 <td className="py-2">{s.createdAt.toDate().toLocaleDateString()}</td>
-                <td className="py-2">{s.crop}</td>
                 <td className="py-2">{s.condition}</td>
                 <td className="py-2">{(s.confidence * 100).toFixed(1)}%</td>
               </tr>

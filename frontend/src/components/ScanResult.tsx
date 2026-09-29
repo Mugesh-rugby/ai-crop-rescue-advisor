@@ -34,7 +34,7 @@ export default function ScanResult({ result, dynamicDiagnosis, diagnosisLoading 
   const severity = severityFromConfidenceAndClass(result);
   const staticInfo = getDiseaseInfo(result.className);
 
-  // Determine active diagnosis source (Ollama dynamic first, static fallback second)
+  // Determine active diagnosis source (Groq AI dynamic first, static fallback second)
   const info = dynamicDiagnosis || staticInfo;
   const isDynamic = Boolean(dynamicDiagnosis);
 
@@ -79,20 +79,6 @@ export default function ScanResult({ result, dynamicDiagnosis, diagnosisLoading 
         </div>
       </div>
 
-      {/* Other Possibilities considered */}
-      <div>
-        <p className="mb-2.5 text-xs font-bold uppercase tracking-wider text-[#7a8a7a]">Other Possibilities</p>
-        <ul className="space-y-1.5 text-xs">
-          {result.topK.slice(1, 4).map((k) => (
-            <li key={k.className} className="flex justify-between font-semibold text-[#556655]">
-              <span>{k.className.replace(/_/g, " ").replace("Tomato   ", "").split("   ").join(" — ")}</span>
-              <span className="font-mono">{(k.confidence * 100).toFixed(1)}%</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      <div className="furrow-divider" />
 
       {/* Diagnosis Details */}
       {diagnosisLoading ? (
@@ -101,13 +87,13 @@ export default function ScanResult({ result, dynamicDiagnosis, diagnosisLoading 
           <p className="text-xs font-bold text-[#1e331b] flex items-center gap-1">
             <Sparkles className="h-3.5 w-3.5 text-[#4c8a38] animate-pulse" /> Generating Dynamic Diagnosis...
           </p>
-          <p className="text-[10px] text-[#556655] mt-1">Calling local Ollama gemma3:1b model for treatment recommendations.</p>
+          <p className="text-[10px] text-[#556655] mt-1">Calling Groq AI for treatment recommendations.</p>
         </div>
       ) : info ? (
         <div className="space-y-5">
           {isDynamic && (
             <div className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2.5 py-0.5 text-[9px] font-extrabold text-[#4c8a38] uppercase border border-green-200">
-              <Sparkles className="h-3 w-3" /> Dynamic Ollama Diagnosis
+              <Sparkles className="h-3 w-3" /> Dynamic Groq AI Diagnosis
             </div>
           )}
 
@@ -131,7 +117,7 @@ export default function ScanResult({ result, dynamicDiagnosis, diagnosisLoading 
         </div>
       ) : (
         <p className="text-xs text-[#7a8a7a] font-semibold text-center py-4">
-          No treatment information found. Train the model or configure Ollama for dynamic content generation.
+          No treatment information found. Train the model or ensure Groq AI API key is configured.
         </p>
       )}
     </div>
@@ -144,8 +130,8 @@ function Section({ title, items, iconColor }: { title: string; items: string[]; 
     <div className="space-y-1.5">
       <p className="text-xs font-bold uppercase tracking-wider text-[#1e331b]">{title}</p>
       <ul className="space-y-1 text-sm text-[#556655]">
-        {items.map((item, idx) => (
-          <li key={idx} className="flex items-start gap-2">
+  {(Array.isArray(items) ? items : []).map((item, idx) => (
+    <li key={idx} className="flex items-start gap-2">
             <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${iconColor || "bg-[#4c8a38]"}`} />
             <span className="leading-tight">{item}</span>
           </li>

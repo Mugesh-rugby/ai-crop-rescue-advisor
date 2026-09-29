@@ -3,7 +3,7 @@
 import { useEffect, useState, useTransition, useRef } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/useAuth";
-import { subscribeToUserScans, computeDashboardStats, type ScanRecord, type DashboardStats } from "@/lib/scans";
+import { loadUserScans, subscribeToUserScans, computeDashboardStats, type ScanRecord, type DashboardStats } from "@/lib/scans";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import {
   Loader2,
@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import ImageCapture from "@/components/ImageCapture";
 import ScanResult from "@/components/ScanResult";
-import { classifyImage, type ClassificationResult } from "@/lib/model";
+import { classifyImage, isModelConfigured, type ClassificationResult } from "@/lib/model";
 import { saveScan, uploadScanImage } from "@/lib/scans";
 import { isFirebaseConfigured } from "@/lib/firebase";
 
@@ -57,93 +57,167 @@ export default function HomePage() {
 // 1. DASHBOARD VIEW
 // -------------------------------------------------------------
 function DashboardView({ onNavigate }: { onNavigate: (tab: string) => void }) {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [scans, setScans] = useState<ScanRecord[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [dbError, setDbError] = useState<string | null>(null);
   const [weather, setWeather] = useState<any>(null);
   const [weatherLoading, setWeatherLoading] = useState(true);
+
+  async function refreshScans() {
+    if (!user) return;
+    setLoading(true);
+    setDbError(null);
+    try {
+      const loaded = await loadUserScans(user.uid);
+      console.log("Refresh loaded scans for user", user.uid, loaded.length);
+      setScans(loaded);
+      setStats(computeDashboardStats(loaded));
+    } catch (err: any) {
+      console.error("Refresh scan load failed:", err);
+      setDbError(err.message || "Could not load scan data.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!user) return;
+    const onScanSaved = () => {
+      console.log("Detected scanSaved event, refreshing dashboard data.");
+      refreshScans();
+    };
+    window.addEventListener("scanSaved", onScanSaved);
+    return () => window.removeEventListener("scanSaved", onScanSaved);
+  }, [user?.uid]);
 
   // Real-time Firestore subscription — strictly per-user
   // When user changes (e.g. sign out / different account), clear data immediately
   useEffect(() => {
+    if (authLoading) {
+      setLoading(true);
+      return;
+    }
+
     if (!user) {
       setScans([]);
       setStats(null);
       setLoading(false);
       return;
     }
+
     setLoading(true);
-    // subscribeToUserScans filters by userId == user.uid in Firestore query
-    const unsub = subscribeToUserScans(user.uid, (data) => {
-      setScans(data);
-      setStats(computeDashboardStats(data));
-      setLoading(false);
-    });
-    // Cleanup listener on unmount or user change — this prevents cross-user data leaks
-    return unsub;
-  }, [user?.uid]);
+    setDbError(null);
+
+    const unsub = subscribeToUserScans(
+      user.uid,
+      (data) => {
+        console.log("Loaded scans for user", user.uid, data.length);
+        setScans(data);
+        setStats(computeDashboardStats(data));
+        setLoading(false);
+      },
+      (error) => {
+        console.error("Dashboard listener error:", error);
+        setDbError(error.message || "Could not load scan data.");
+        setLoading(false);
+      }
+    );
+
+    (async () => {
+      try {
+        const initialScans = await loadUserScans(user.uid);
+        console.log("Initial scan load for user", user.uid, initialScans.length);
+        setScans(initialScans);
+        setStats(computeDashboardStats(initialScans));
+      } catch (err: any) {
+        console.warn("Initial scan load failed:", err);
+      } finally {
+        setLoading(false);
+      }
+    })();
+
+    return () => {
+      unsub();
+    };
+  }, [user?.uid, authLoading]);
 
 
-  // Dynamic Weather fetch for Chetput, IN
+  // Dynamic Weather fetch — uses browser geolocation, falls back to Chetput, IN
   useEffect(() => {
+    async function fetchWeatherForCoords(lat: number, lon: number) {
+      const apiKey = process.env.NEXT_PUBLIC_OPENWEATHER_API_KEY;
+      if (!apiKey) throw new Error("OpenWeather API key is missing.");
+
+      // Reverse geocode to get city name
+      let locationLabel = "Your Location";
+      try {
+        const geoRes = await fetch(
+          `https://api.openweathermap.org/geo/1.0/reverse?lat=${lat}&lon=${lon}&limit=1&appid=${apiKey}`
+        );
+        if (geoRes.ok) {
+          const geoData = await geoRes.json();
+          if (geoData?.length > 0) {
+            const g = geoData[0];
+            locationLabel = `${g.name}, ${g.country}`;
+          }
+        }
+      } catch (_) {}
+
+      const res = await fetch(
+        `https://api.openweathermap.org/data/2.5/onecall?lat=${lat}&lon=${lon}&exclude=minutely,alerts&units=metric&appid=${apiKey}`
+      );
+      if (!res.ok) throw new Error("Weather API failed");
+      const data = await res.json();
+
+      const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+      setWeather({
+        location: locationLabel,
+        temp: Math.round(data.current.temp),
+        condition: data.current.weather?.[0]?.description || data.current.weather?.[0]?.main || "Overcast",
+        humidity: data.current.humidity,
+        windSpeed: Math.round((data.current.wind_speed ?? 0) * 3.6), // m/s → km/h
+        rain: data.current.rain?.["1h"] ?? 0,
+        forecast: data.daily.slice(0, 5).map((day: any, idx: number) => ({
+          day: idx === 0 ? "Today" : days[new Date(day.dt * 1000).getDay()],
+          temp: Math.round(day.temp.max),
+          condition: day.weather?.[0]?.main || "Overcast",
+          rainProb: Math.round((day.pop ?? 0) * 100),
+        })),
+      });
+    }
+
     async function fetchWeather() {
       try {
-        const lat = 12.4497;
-        const lon = 79.3512;
-        const res = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,precipitation&daily=weather_code,temperature_2m_max,precipitation_probability_max&timezone=auto`
+        const position = await new Promise<GeolocationPosition>((resolve, reject) =>
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            timeout: 8000,
+            maximumAge: 300000,
+          })
         );
-        if (!res.ok) throw new Error("Weather API failed");
-        const data = await res.json();
-        
-        const getCondition = (code: number) => {
-          if (code === 0) return "Clear Sky";
-          if ([1, 2, 3].includes(code)) return "Partly Cloudy";
-          if ([45, 48].includes(code)) return "Foggy";
-          if ([51, 53, 55].includes(code)) return "Drizzle";
-          if ([61, 63, 65].includes(code)) return "Rainy";
-          if ([80, 81, 82].includes(code)) return "Showers";
-          if ([95, 96, 99].includes(code)) return "Thunderstorm";
-          return "Overcast";
-        };
-
-        const today = new Date();
-        const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-        
-        setWeather({
-          temp: Math.round(data.current.temperature_2m),
-          condition: getCondition(data.current.weather_code),
-          humidity: data.current.relative_humidity_2m,
-          windSpeed: Math.round(data.current.wind_speed_10m),
-          rain: data.current.precipitation,
-          forecast: data.daily.time.slice(0, 3).map((timeStr: string, idx: number) => {
-            const date = new Date(timeStr);
-            let dayName = days[date.getDay()];
-            if (idx === 0) dayName = "Today";
-            if (idx === 1) dayName = "Tomorrow";
-            return {
-              day: dayName,
-              temp: Math.round(data.daily.temperature_2m_max[idx]),
-              condition: getCondition(data.daily.weather_code[idx]),
-              rainProb: data.daily.precipitation_probability_max[idx] || 0,
-            };
-          }),
-        });
-      } catch (err) {
-        console.error("Weather load error, using static fallback:", err);
-        setWeather({
-          temp: 35,
-          condition: "Overcast Clouds",
-          humidity: 60,
-          windSpeed: 6,
-          rain: 0.0,
-          forecast: [
-            { day: "Today", temp: 35, condition: "Overcast Clouds", rainProb: 10 },
-            { day: "Tomorrow", temp: 34, condition: "Partly Cloudy", rainProb: 0 },
-            { day: "Day 3", temp: 32, condition: "Light Drizzle", rainProb: 75 },
-          ],
-        });
+        await fetchWeatherForCoords(position.coords.latitude, position.coords.longitude);
+      } catch (_geoErr) {
+        // Geolocation denied or unavailable — fall back to Chetput, IN
+        try {
+          await fetchWeatherForCoords(12.4497, 79.3512);
+        } catch (err) {
+          console.error("Weather load error, using static fallback:", err);
+          setWeather({
+            location: "Chetput, IN",
+            temp: 35,
+            condition: "Overcast Clouds",
+            humidity: 60,
+            windSpeed: 6,
+            rain: 0.0,
+            forecast: [
+              { day: "Today", temp: 35, condition: "Overcast Clouds", rainProb: 10 },
+              { day: "Tomorrow", temp: 34, condition: "Partly Cloudy", rainProb: 0 },
+              { day: "Day 3", temp: 32, condition: "Light Drizzle", rainProb: 75 },
+            ],
+          });
+        }
       } finally {
         setWeatherLoading(false);
       }
@@ -210,7 +284,7 @@ function DashboardView({ onNavigate }: { onNavigate: (tab: string) => void }) {
                   <CloudSun className="h-5 w-5 text-[#4c8a38]" /> Weather Conditions
                 </h3>
                 <span className="rounded-full bg-[#eef6eb] px-2.5 py-0.5 text-xs font-bold text-[#396c2a] uppercase tracking-wider">
-                  Chetput, IN
+                  {weather?.location || "Locating..."}
                 </span>
               </div>
 
@@ -278,7 +352,14 @@ function DashboardView({ onNavigate }: { onNavigate: (tab: string) => void }) {
           </div>
         </div>
 
-        {/* Core Modules Grid */}
+        {dbError && (
+        <div className="rounded-3xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <p className="font-semibold">Unable to load scan dashboard data.</p>
+          <p className="mt-1">{dbError}</p>
+        </div>
+      )}
+
+      {/* Core Modules Grid */}
         <div className="lg:col-span-2 space-y-6">
           <div className="card">
             <h3 className="font-display font-bold text-lg text-[#1e331b] border-b border-[#e2edd8] pb-3 mb-5">
@@ -309,7 +390,7 @@ function DashboardView({ onNavigate }: { onNavigate: (tab: string) => void }) {
               />
               <ModuleCard
                 title="Expert Consultation"
-                description="Discuss farm diagnostics or queries with a dedicated local Ollama chat assistant."
+                description="Discuss farm diagnostics or queries with a dedicated Groq AI chat assistant."
                 buttonText="Start Consultation"
                 icon={<Users className="h-5 w-5" />}
                 onClick={() => onNavigate("chat")}
@@ -367,7 +448,16 @@ function DashboardView({ onNavigate }: { onNavigate: (tab: string) => void }) {
 
       {/* Recent Scans Table */}
       <div className="card">
-        <h3 className="font-display font-bold text-base text-[#1e331b] mb-4">Recent Scans</h3>
+        <div className="flex items-center justify-between gap-4">
+          <h3 className="font-display font-bold text-base text-[#1e331b] mb-4">Recent Scans</h3>
+          <button
+            type="button"
+            onClick={refreshScans}
+            className="btn-secondary text-xs font-semibold py-2 px-3"
+          >
+            Refresh
+          </button>
+        </div>
         {loading ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="h-6 w-6 animate-spin text-[#4c8a38]" />
@@ -393,20 +483,16 @@ function DashboardView({ onNavigate }: { onNavigate: (tab: string) => void }) {
                   <tr key={s.id} className="text-[#2d402b] hover:bg-[#fafcf9] transition-colors">
                     <td className="py-3 pr-4">
                       {s.imageUrl ? (
-                        <img src={s.imageUrl} alt={s.crop} className="h-10 w-10 rounded-lg object-cover border border-[#dceed5] shadow-xs" />
+                        <img src={s.imageUrl} alt={s.condition} className="h-10 w-10 rounded-lg object-cover border border-[#dceed5] shadow-xs" />
                       ) : (
-                        <div className="h-10 w-10 rounded-lg bg-[#eef6eb] flex items-center justify-center">🍂</div>
+                        <div className="h-10 w-10 rounded-lg bg-[#eef6eb] flex items-center justify-center text-xs font-bold uppercase text-[#4c8a38]">
+                          {s.condition?.slice(0, 2) || "SC"}
+                        </div>
                       )}
                     </td>
                     <td className="py-3 px-4 font-semibold">{s.createdAt.toDate().toLocaleDateString()}</td>
-                    <td className="py-3 px-4 font-bold text-[#396c2a]">{s.crop}</td>
-                    <td className="py-3 px-4">
-                      <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-bold ${
-                        s.isHealthy ? "bg-green-50 text-green-700 border border-green-200" : "bg-orange-50 text-orange-700 border border-orange-200"
-                      }`}>
-                        {s.condition}
-                      </span>
-                    </td>
+                    <td className="py-3 px-4 font-semibold text-[#396c2a]">{s.crop || s.condition}</td>
+                    <td className="py-3 px-4 font-bold text-[#396c2a]">{s.condition}</td>
                     <td className="py-3 px-4 font-extrabold text-right font-mono">{(s.confidence * 100).toFixed(1)}%</td>
                   </tr>
                 ))}
@@ -505,23 +591,25 @@ function ScanView() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [diagnosis, setDiagnosis] = useState<any>(null);
   const [diagLoading, setDiagLoading] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "failed">("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   async function handleImageReady(blob: Blob, preview: string) {
     setPreviewUrl(preview);
     setResult(null);
     setDiagnosis(null);
-    setSaved(false);
+    setSaveStatus("idle");
+    setSaveError(null);
     setStatus("analyzing");
 
     try {
-      // 1. Run classifier locally (model or simulated sandbox classifier)
+      // 1. Run classifier — tries Python PyTorch backend first, falls back to TFJS
       const imgEl = await blobToImageElement(blob);
-      const classification = await classifyImage(imgEl);
+      const classification = await classifyImage(imgEl, blob);
       setResult(classification);
       setStatus("done");
 
-      // 2. Fetch diagnosis dynamically from local Ollama
+      // 2. Fetch diagnosis dynamically from Groq AI
       setDiagLoading(true);
       try {
         const diagRes = await fetch("/api/diagnose", {
@@ -539,10 +627,10 @@ function ScanView() {
           const diagData = await diagRes.json();
           setDiagnosis(diagData);
         } else {
-          console.warn("Failed to fetch Ollama diagnosis, falling back to static info.");
+          console.warn("Failed to fetch Groq AI diagnosis, falling back to static info.");
         }
       } catch (err) {
-        console.warn("Ollama diagnosis API failed:", err);
+        console.warn("Groq AI diagnosis API failed:", err);
       } finally {
         setDiagLoading(false);
       }
@@ -555,28 +643,24 @@ function ScanView() {
         // Should not happen since UI prompts sign-in, but guard anyway
         setErrorMsg("Sign in to save this scan to your account.");
       } else {
+        setSaveStatus("saving");
+        setSaveError(null);
         try {
-          // Upload image then save record — handle each step so failures are clear
-          const imageUrl = await uploadScanImage(user.uid, blob);
+          const docId = await saveScan(user.uid, classification);
           try {
-            const docId = await saveScan(user.uid, imageUrl, classification);
-            console.info("Scan saved", docId);
-            setSaved(true);
-          } catch (saveErr: any) {
-            console.error("Failed to save scan record:", saveErr);
-            setErrorMsg(
-              saveErr?.message
-                ? `Could not save scan: ${saveErr.message}`
-                : "Could not save scan to database."
-            );
+            await uploadScanImage(user.uid, docId, blob);
+          } catch (uploadErr: any) {
+            console.warn("Image upload failed after saving scan record:", uploadErr);
           }
-        } catch (uploadErr: any) {
-          console.error("Failed to upload scan image:", uploadErr);
-          setErrorMsg(
-            uploadErr?.message
-              ? `Could not upload image: ${uploadErr.message}`
-              : "Could not upload scan image. Check storage configuration."
-          );
+          console.info("Scan saved", docId);
+          setSaveStatus("saved");
+          window.dispatchEvent(new Event("scanSaved"));
+        } catch (saveErr: any) {
+          console.error("Failed to save scan record:", saveErr);
+          setSaveStatus("failed");
+          const message = saveErr?.message || "Could not save scan to database.";
+          setSaveError(message);
+          setErrorMsg(message);
         }
       }
     } catch (err: any) {
@@ -628,9 +712,17 @@ function ScanView() {
         <div className="space-y-6">
           <ScanResult result={result} dynamicDiagnosis={diagnosis} diagnosisLoading={diagLoading} />
           {user && (
-            <p className="text-center text-xs font-bold text-[#4c8a38] uppercase tracking-wider">
-              {saved ? "✓ Scan records synchronized to dashboard" : "Synchronizing..."}
-            </p>
+            <div className="text-center text-xs uppercase tracking-wider">
+              {saveStatus === "saving" && (
+                <p className="font-bold text-[#4c8a38]">Saving scan record to your dashboard...</p>
+              )}
+              {saveStatus === "saved" && (
+                <p className="font-bold text-[#4c8a38]">✓ Scan saved successfully to your dashboard.</p>
+              )}
+              {saveStatus === "failed" && (
+                <p className="font-bold text-red-600">Save failed: {saveError || "Check your connection."}</p>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -679,7 +771,7 @@ function AdvisorView() {
       const data = await res.json();
       setResponse(data.reply);
     } catch (err: any) {
-      setErrorMsg(err.message || "Failed to contact Ollama for suggestions.");
+      setErrorMsg(err.message || "Failed to contact Groq AI for suggestions.");
     } finally {
       setLoading(false);
     }
@@ -690,7 +782,7 @@ function AdvisorView() {
       <div>
         <h1 className="font-display text-3xl font-extrabold text-[#112211]">Crop Recommendation Advisor</h1>
         <p className="mt-1 text-sm text-[#556655]">
-          Get intelligent crop suggestions from local Ollama gemma3 based on your local soil and climate conditions.
+          Get intelligent crop suggestions from Groq AI based on your local soil and climate conditions.
         </p>
       </div>
 
@@ -739,7 +831,7 @@ function AdvisorView() {
           <button type="submit" disabled={loading} className="btn-primary w-full py-3 text-sm flex items-center justify-center gap-1.5">
             {loading ? (
               <>
-                <Loader2 className="h-4 w-4 animate-spin" /> Querying Ollama AI...
+                <Loader2 className="h-4 w-4 animate-spin" /> Querying Groq AI...
               </>
             ) : (
               <>
@@ -766,7 +858,7 @@ function AdvisorView() {
               <div className="flex-1 rounded-xl bg-red-50 border border-red-100 p-4 text-xs text-red-700 leading-normal flex items-start gap-2">
                 <AlertCircleIcon className="h-4 w-4 shrink-0 text-red-500 mt-0.5" />
                 <div>
-                  <p className="font-bold">Ollama Unreachable</p>
+                  <p className="font-bold">Groq AI Unreachable</p>
                   <p className="mt-0.5">{errorMsg}</p>
                 </div>
               </div>
@@ -800,60 +892,81 @@ function WeatherView() {
   const [schedule, setSchedule] = useState<string | null>(null);
   const [scheduleLoading, setScheduleLoading] = useState(false);
 
+  const [locationName, setLocationName] = useState("Locating...");
+
   useEffect(() => {
+    async function loadWeatherForCoords(lat: number, lon: number) {
+      const apiKey = process.env.NEXT_PUBLIC_OPENWEATHER_API_KEY;
+      if (!apiKey) throw new Error("OpenWeather API key is missing.");
+
+      // Reverse geocode to get city/district name
+      try {
+        const geoRes = await fetch(
+          `https://api.openweathermap.org/geo/1.0/reverse?lat=${lat}&lon=${lon}&limit=1&appid=${apiKey}`
+        );
+        if (geoRes.ok) {
+          const geoData = await geoRes.json();
+          if (geoData?.length > 0) {
+            const g = geoData[0];
+            setLocationName(`${g.name}, ${g.country}`);
+          }
+        }
+      } catch (_) {}
+
+      const res = await fetch(
+        `https://api.openweathermap.org/data/2.5/onecall?lat=${lat}&lon=${lon}&exclude=minutely,alerts&units=metric&appid=${apiKey}`
+      );
+      if (!res.ok) throw new Error("Weather API failed");
+      const data = await res.json();
+
+      const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+      setWeather({
+        temp: Math.round(data.current.temp),
+        humidity: data.current.humidity,
+        wind: Math.round((data.current.wind_speed ?? 0) * 3.6), // m/s → km/h
+        rain: data.current.rain?.["1h"] ?? 0,
+        condition: data.current.weather?.[0]?.description || data.current.weather?.[0]?.main || "Overcast",
+        forecast: data.daily.slice(0, 5).map((day: any, idx: number) => ({
+          day: idx === 0 ? "Today" : days[new Date(day.dt * 1000).getDay()],
+          temp: Math.round(day.temp.max),
+          condition: day.weather?.[0]?.main || "Overcast",
+          rainProb: Math.round((day.pop ?? 0) * 100),
+        })),
+      });
+    }
+
     async function loadWeather() {
       try {
-        const lat = 12.4497;
-        const lon = 79.3512;
-        const res = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,precipitation&daily=weather_code,temperature_2m_max,precipitation_probability_max&timezone=auto`
+        const position = await new Promise<GeolocationPosition>((resolve, reject) =>
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            timeout: 8000,
+            maximumAge: 300000,
+          })
         );
-        if (!res.ok) throw new Error("Weather API failed");
-        const data = await res.json();
-        
-        const getCondition = (code: number) => {
-          if (code === 0) return "Sunny";
-          if ([1, 2, 3].includes(code)) return "Partly Cloudy";
-          if ([45, 48].includes(code)) return "Foggy";
-          if ([61, 63, 65].includes(code)) return "Rainy";
-          return "Overcast";
-        };
-
-        const today = new Date();
-        const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-        setWeather({
-          temp: Math.round(data.current.temperature_2m),
-          humidity: data.current.relative_humidity_2m,
-          wind: Math.round(data.current.wind_speed_10m),
-          rain: data.current.precipitation,
-          condition: getCondition(data.current.weather_code),
-          forecast: data.daily.time.slice(0, 5).map((timeStr: string, idx: number) => {
-            const date = new Date(timeStr);
-            return {
-              day: days[date.getDay()],
-              temp: Math.round(data.daily.temperature_2m_max[idx]),
-              condition: getCondition(data.daily.weather_code[idx]),
-              rainProb: data.daily.precipitation_probability_max[idx] || 0,
-            };
-          }),
-        });
-      } catch (err) {
-        console.error(err);
-        setWeather({
-          temp: 35,
-          humidity: 60,
-          wind: 6,
-          rain: 0,
-          condition: "Overcast",
-          forecast: [
-            { day: "Monday", temp: 35, condition: "Overcast", rainProb: 10 },
-            { day: "Tuesday", temp: 34, condition: "Sunny", rainProb: 0 },
-            { day: "Wednesday", temp: 32, condition: "Rainy", rainProb: 80 },
-            { day: "Thursday", temp: 33, condition: "Cloudy", rainProb: 40 },
-            { day: "Friday", temp: 34, condition: "Sunny", rainProb: 0 },
-          ],
-        });
+        await loadWeatherForCoords(position.coords.latitude, position.coords.longitude);
+      } catch (_geoErr) {
+        // Geolocation denied — fall back to Chetput, IN
+        setLocationName("Chetput, IN");
+        try {
+          await loadWeatherForCoords(12.4497, 79.3512);
+        } catch (err) {
+          console.error(err);
+          setWeather({
+            temp: 35,
+            humidity: 60,
+            wind: 6,
+            rain: 0,
+            condition: "Overcast",
+            forecast: [
+              { day: "Today", temp: 35, condition: "Overcast", rainProb: 10 },
+              { day: "Tomorrow", temp: 34, condition: "Sunny", rainProb: 0 },
+              { day: "Wednesday", temp: 32, condition: "Rainy", rainProb: 80 },
+              { day: "Thursday", temp: 33, condition: "Cloudy", rainProb: 40 },
+              { day: "Friday", temp: 34, condition: "Sunny", rainProb: 0 },
+            ],
+          });
+        }
       } finally {
         setLoading(false);
       }
@@ -882,7 +995,7 @@ function WeatherView() {
       setSchedule(data.reply);
     } catch (err) {
       console.error(err);
-      setSchedule("• Day 1: Water in the morning (15 mins) - heat index is moderate.\n• Day 2: Light watering if soil feels dry.\n• Day 3: Skip watering (precipitation forecasted).");
+      setSchedule("• Day 1: Water in the morning (15 mins) - heat index is moderate.\n• Day 2: Light watering if soil feels dry.\n• Day 3: Skip watering if rain is forecast.\n• Monitor soil moisture before each irrigation.");
     } finally {
       setScheduleLoading(false);
     }
@@ -906,7 +1019,7 @@ function WeatherView() {
           {/* Main Weather details */}
           <div className="card md:col-span-2 space-y-6">
             <h3 className="font-display font-bold text-base text-[#1e331b] border-b border-[#eef6eb] pb-2">
-              Agricultural Forecast (Chetput, IN)
+              Agricultural Forecast ({locationName})
             </h3>
             <div className="grid grid-cols-2 gap-4">
               <div className="rounded-xl bg-[#fafcf9] border border-[#dceed5] p-4">
@@ -940,7 +1053,7 @@ function WeatherView() {
               Irrigation Scheduler
             </h3>
             <p className="text-xs text-[#556655] leading-relaxed">
-              Generate an irrigation schedule recommendation from local Ollama using today&apos;s weather indicators.
+              Generate an irrigation schedule recommendation from Groq AI using today&apos;s weather indicators.
             </p>
             <button onClick={getWateringSchedule} disabled={scheduleLoading} className="btn-primary w-full py-2.5 text-xs flex items-center justify-center gap-1.5">
               {scheduleLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Droplets className="h-4 w-4" />}
@@ -990,7 +1103,7 @@ function ChatView() {
       const data = await res.json();
       setMessages((prev) => [...prev, { role: "assistant", content: data.reply }]);
     } catch (err: any) {
-      setErrorMsg(err.message || "Failed to reach local Ollama AI.");
+      setErrorMsg(err.message || "Failed to reach Groq AI.");
     } finally {
       setLoading(false);
     }
@@ -1001,7 +1114,7 @@ function ChatView() {
       <div className="mb-4">
         <h1 className="font-display text-3xl font-extrabold text-[#112211]">CropRescue AI Hub</h1>
         <p className="mt-1 text-sm text-[#556655]">
-          A dedicated agricultural assistant powered by Ollama gemma3:1b.
+          A dedicated agricultural assistant powered by Groq AI (Llama 3.3).
         </p>
       </div>
 
@@ -1045,7 +1158,7 @@ function ChatView() {
             <div className="flex gap-2 rounded-xl bg-red-50 border border-red-100 p-4 text-xs text-red-700 leading-normal items-start max-w-[80%]">
               <AlertCircleIcon className="h-4 w-4 shrink-0 text-red-500 mt-0.5" />
               <div>
-                <p className="font-bold">Ollama Connection Failed</p>
+                <p className="font-bold">Groq AI Connection Failed</p>
                 <p className="mt-0.5">{errorMsg}</p>
               </div>
             </div>

@@ -58,7 +58,7 @@ export default function ChatbotWidget() {
     } catch (err: any) {
       console.error(err);
       setErrorMsg(
-        err.message || "Failed to connect to local Ollama server. Verify it is running with gemma3:1b model."
+        err.message || "Failed to connect to Groq AI. Check your GROQ_API_KEY and internet connection."
       );
     } finally {
       setLoading(false);
@@ -79,7 +79,7 @@ export default function ChatbotWidget() {
               <div>
                 <h3 className="text-sm font-bold text-[#1e331b]">CropRescue AI</h3>
                 <p className="text-[10px] font-semibold text-[#556655]">
-                  • Powered by Ollama
+                  • Powered by Groq AI
                 </p>
               </div>
             </div>
@@ -168,7 +168,7 @@ export default function ChatbotWidget() {
               <div className="flex items-start gap-2 rounded-xl bg-red-50 border border-red-100 p-3 text-xs text-red-700 leading-normal">
                 <AlertCircle className="h-4 w-4 shrink-0 text-red-500 mt-0.5" />
                 <div>
-                  <p className="font-bold">Ollama Assistant Unreachable</p>
+                  <p className="font-bold">AI assistant unavailable</p>
                   <p className="mt-0.5">{errorMsg}</p>
                 </div>
               </div>

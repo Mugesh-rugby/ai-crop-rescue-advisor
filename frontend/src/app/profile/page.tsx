@@ -155,22 +155,14 @@ export default function ProfilePage() {
                     <tr key={s.id} className="text-[#2d402b] hover:bg-[#fafcf9]">
                       <td className="py-3 pr-4">
                         {s.imageUrl ? (
-                          <img src={s.imageUrl} alt={s.crop} className="h-10 w-10 rounded-lg border border-[#dceed5] object-cover" />
+                          <img src={s.imageUrl} alt={s.condition} className="h-10 w-10 rounded-lg border border-[#dceed5] object-cover" />
                         ) : (
                           <div className="h-10 w-10 rounded-lg bg-[#eef6eb] flex items-center justify-center text-base">🍃</div>
                         )}
                       </td>
                       <td className="py-3 px-4 font-semibold">{s.createdAt.toDate().toLocaleDateString()}</td>
-                      <td className="py-3 px-4 font-bold text-[#396c2a]">{s.crop}</td>
-                      <td className="py-3 px-4">
-                        <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-bold ${
-                          s.isHealthy
-                            ? "bg-green-50 text-green-700 border border-green-200"
-                            : "bg-orange-50 text-orange-700 border border-orange-200"
-                        }`}>
-                          {s.condition}
-                        </span>
-                      </td>
+                      <td className="py-3 px-4 font-semibold text-[#396c2a]">{s.crop || s.condition}</td>
+                      <td className="py-3 px-4 font-bold text-[#396c2a]">{s.condition}</td>
                       <td className="py-3 px-4 font-mono font-extrabold text-right">
                         {(s.confidence * 100).toFixed(1)}%
                       </td>

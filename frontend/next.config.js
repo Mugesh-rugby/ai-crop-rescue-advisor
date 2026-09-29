@@ -12,7 +12,7 @@ const nextConfig = {
     config.resolve.fallback = { ...config.resolve.fallback, fs: false };
     return config;
   },
-  // Allow longer response times from Ollama (local LLM can be slow)
+  // Allow adequate response times from Groq AI API
   experimental: {
     serverComponentsExternalPackages: [],
   },
